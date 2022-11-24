@@ -1,11 +1,15 @@
 # # MCMC inference using Julia Hub
 # ### Load dependencies
 
-using Distributed
-addprocs(3)
+# using Distributed
+# using Pkg
+# Pkg.activate(".")
+# Pkg.instantiate()
 
-using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
-using CSV, DataFrames
+# using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
+# using CSV, DataFrames
+
+# addprocs(3)
 
 @everywhere using Pkg
 @everywhere Pkg.activate(".")
@@ -58,6 +62,9 @@ end
     rev_wud = reverse(w_ud)
 end
 ## Generative model and likelihood in Turing
+
+
+@info "Defining model"
 
 @everywhere @model function ebola(
     onset_cases,
@@ -152,7 +159,7 @@ end
     end
 end
 ##
-
+@info "generating model"
 @everywhere model = ebola(
     onsets[:,1:(end-6)],
     reported[:,1:(end-6)],
@@ -174,9 +181,10 @@ end
 )
 nsamples = 6000
 nchains = 3
+@info "Sampling"
 # chain = sample(model, sampler, nsamples)
-chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains)
+chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains, progress=true)
 
 CSV.write("mcmc/ebola_chain.csv", chain)
 
-ENV["RESULTS_FILE"] = "mcmc/ebola_chain.csv"
+# ENV["RESULTS_FILE"] = "mcmc/ebola_chain.csv"
