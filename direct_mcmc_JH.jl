@@ -19,18 +19,19 @@
     using CSV, DataFrames
 end
 
+@info "Load data"
 
 ## ### Load data
 @everywhere begin
-    onsets = load("data/onset_and_reported_cases.jld2")["onsets"]
-    onsets_hcw = load("data/onset_and_reported_cases.jld2")["onsets_hcw"]
-    reported = load("data/onset_and_reported_cases.jld2")["reported"]
-    reported_hcw = load("data/onset_and_reported_cases.jld2")["reported_hcw"]
-    dates = load("data/onset_and_reported_cases.jld2")["dates"]
+    onsets = load("onset_and_reported_cases.jld2")["onsets"]
+    onsets_hcw = load("onset_and_reported_cases.jld2")["onsets_hcw"]
+    reported = load("onset_and_reported_cases.jld2")["reported"]
+    reported_hcw = load("onset_and_reported_cases.jld2")["reported_hcw"]
+    dates = load("onset_and_reported_cases.jld2")["dates"]
     case_district_names =
-        load("data/onset_and_reported_cases.jld2")["case_district_names"] .|> String
-    dist_mat = load("data/named_dist_mat.jld2")["named_dist_mat"]
-    pop_data = CSV.File("data/uganda_district_pop_sizes.csv") |> DataFrame
+        load("onset_and_reported_cases.jld2")["case_district_names"] .|> String
+    dist_mat = load("named_dist_mat.jld2")["named_dist_mat"]
+    pop_data = CSV.File("uganda_district_pop_sizes.csv") |> DataFrame
 end
 
 ## ### Gravity model set-up
@@ -185,6 +186,6 @@ nchains = 3
 # chain = sample(model, sampler, nsamples)
 chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains, progress=true)
 
-CSV.write("mcmc/ebola_chain.csv", chain)
+CSV.write("ebola_chain.csv", chain)
 
-# ENV["RESULTS_FILE"] = "mcmc/ebola_chain.csv"
+ENV["RESULTS_FILE"] = "ebola_chain.csv"
