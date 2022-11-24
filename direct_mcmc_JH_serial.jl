@@ -12,26 +12,27 @@
 # addprocs(3)
 
 
-
-
 using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
 using CSV, DataFrames
 
 
 
 ## ### Load data
-    onsets = load("data/onset_and_reported_cases.jld2")["onsets"]
-    onsets_hcw = load("data/onset_and_reported_cases.jld2")["onsets_hcw"]
-    reported = load("data/onset_and_reported_cases.jld2")["reported"]
-    reported_hcw = load("data/onset_and_reported_cases.jld2")["reported_hcw"]
-    dates = load("data/onset_and_reported_cases.jld2")["dates"]
-    case_district_names =
-        load("data/onset_and_reported_cases.jld2")["case_district_names"] .|> String
-    dist_mat = load("data/named_dist_mat.jld2")["named_dist_mat"]
-    pop_data = CSV.File("data/uganda_district_pop_sizes.csv") |> DataFrame
+
+onsets = load("data/onset_and_reported_cases.jld2")["onsets"]
+onsets_hcw = load("data/onset_and_reported_cases.jld2")["onsets_hcw"]
+reported = load("data/onset_and_reported_cases.jld2")["reported"]
+reported_hcw = load("data/onset_and_reported_cases.jld2")["reported_hcw"]
+dates = load("data/onset_and_reported_cases.jld2")["dates"]
+case_district_names =
+    load("data/onset_and_reported_cases.jld2")["case_district_names"] .|> String
+dist_mat = load("data/named_dist_mat.jld2")["named_dist_mat"]
+pop_data = CSV.File("data/uganda_district_pop_sizes.csv") |> DataFrame
+
 
 ## ### Gravity model set-up
 # Basic gravity model prediction for where Mubende flux goes
+@everywhere begin
     α̂, β̂ = [1.736715422247352, 2.4621672945356283]
     pops = pop_data.population_size
     flux = (pops .^ α̂) * (pops .^ α̂)' ./ (dist_mat .^ β̂)
@@ -49,20 +50,20 @@ using CSV, DataFrames
 
     # Set-up the unnormalised movement rate by district
     move_prob = pops .^ (α̂ - 1) / maximum(pops .^ (α̂ - 1))
-
+end
 ## Parameters
-
+@everywhere begin
     γᵣ = 1 / 10 # Removal rate for undetecteds
     R_mean_prior = 0.588 * 5 + sum(0.588 * [zeros(7); [0.2 * exp(-γᵣ * t)  for t = 1:25]])
     w_ud = normalize([zeros(7); [exp(-γᵣ * t) for t = 1:30]], 1)
     rev_wud = reverse(w_ud)
-
+end
 ## Generative model and likelihood in Turing
 
 
 @info "Defining model"
 
-@model function ebola(
+@everywhere @model function ebola(
     onset_cases,
     reported_cases,
     onset_cases_hcw,
@@ -144,6 +145,7 @@ end
 
 
 ## Set up data
+@everywhere begin
     _cases_dest_prob_mat = dest_prob_mat[case_district_names, case_district_names].array
     cases_dest_prob_mat = vcat(_cases_dest_prob_mat, 1.0 .- sum(_cases_dest_prob_mat,dims = 1))
 
@@ -152,10 +154,10 @@ end
         idxs = [name ∈ case_district_names for name in pop_data.Districts]
         move_prob[idxs]
     end
-
+end
 ##
 @info "generating model"
-model = ebola(
+@everywhere model = ebola(
     onsets[:,1:(end-6)],
     reported[:,1:(end-6)],
     onsets_hcw[:,1:(end-6)],
@@ -170,16 +172,16 @@ model = ebola(
 
 ##
 
-sampler = Gibbs(
+@everywhere sampler = Gibbs(
     MH(:R₀,:Rₕ, :move_scaler, :isolation_rate),
     PG(50, :undetected_infections, :D_inf_duration),
 )
-nsamples = 3000
+nsamples = 6000
 nchains = 3
 @info "Sampling"
 # chain = sample(model, sampler, nsamples)
-chain = sample(model, sampler, nsamples, progress=true)
+chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains, progress=true)
 
-CSV.write("mcmc/ebola_chain1.csv", chain)
+CSV.write("mcmc/ebola_chain.csv", chain)
 
 # ENV["RESULTS_FILE"] = "mcmc/ebola_chain.csv"
