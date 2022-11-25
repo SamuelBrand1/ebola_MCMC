@@ -13,26 +13,30 @@
 
 
 using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
-using CSV, DataFrames
+using CSV, DataFrames, Downloads, AdvancedMH
 
 
 
-## ### Load data
+## ### Load data remotely
 
-onsets = load("data/onset_and_reported_cases.jld2")["onsets"]
-onsets_hcw = load("data/onset_and_reported_cases.jld2")["onsets_hcw"]
-reported = load("data/onset_and_reported_cases.jld2")["reported"]
-reported_hcw = load("data/onset_and_reported_cases.jld2")["reported_hcw"]
-dates = load("data/onset_and_reported_cases.jld2")["dates"]
-case_district_names =
-    load("data/onset_and_reported_cases.jld2")["case_district_names"] .|> String
-dist_mat = load("data/named_dist_mat.jld2")["named_dist_mat"]
-pop_data = CSV.File("data/uganda_district_pop_sizes.csv") |> DataFrame
+url_pop_data = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/uganda_district_pop_sizes.csv"
+url_dist_mat = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/named_dist_mat.jld2"
+url_case_data = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/onset_and_reported_cases.jld2"
+
+case_data_dict = load(Downloads.download(url_case_data))
+onsets = case_data_dict["onsets"]
+onsets_hcw = case_data_dict["onsets_hcw"]
+reported = case_data_dict["reported"]
+reported_hcw = case_data_dict["reported_hcw"]
+dates = case_data_dict["dates"]
+case_district_names = case_data_dict["case_district_names"] .|> String
+dist_mat = load(Downloads.download(url_dist_mat))["named_dist_mat"]
+pop_data = CSV.File(Downloads.download(url_pop_data)) |> DataFrame
 
 
 ## ### Gravity model set-up
 # Basic gravity model prediction for where Mubende flux goes
-@everywhere begin
+ begin
     α̂, β̂ = [1.736715422247352, 2.4621672945356283]
     pops = pop_data.population_size
     flux = (pops .^ α̂) * (pops .^ α̂)' ./ (dist_mat .^ β̂)
@@ -52,7 +56,7 @@ pop_data = CSV.File("data/uganda_district_pop_sizes.csv") |> DataFrame
     move_prob = pops .^ (α̂ - 1) / maximum(pops .^ (α̂ - 1))
 end
 ## Parameters
-@everywhere begin
+begin
     γᵣ = 1 / 10 # Removal rate for undetecteds
     R_mean_prior = 0.588 * 5 + sum(0.588 * [zeros(7); [0.2 * exp(-γᵣ * t)  for t = 1:25]])
     w_ud = normalize([zeros(7); [exp(-γᵣ * t) for t = 1:30]], 1)
@@ -63,7 +67,8 @@ end
 
 @info "Defining model"
 
-@everywhere @model function ebola(
+
+@model function ebola(
     onset_cases,
     reported_cases,
     onset_cases_hcw,
@@ -72,15 +77,14 @@ end
     move_prob,
     rev_wud,
     prob_detect,
-    obs_switch,
-    onset_duration
+    obs_switch
 )
     # Priors
     R₀ ~ Gamma(3, 4 / 3) #Basic R₀
     Rₕ ~ Exponential(1) # Mean number of healthcare workers infected
     move_scaler ~ Beta(1, 1) #scales the probability of moving away from district
     isolation_rate ~ Gamma(2, 0.25 / 2) #Rate at which infected people are found and isolated
-    D_inf_duration ~ DiscreteUniform(3,10) #Duration of period eventually detected infecteds transmit for if not isolated
+    D_inf_duration ~ DiscreteUniform(3,7) #Duration of period eventually detected infecteds transmit for if not isolated
 
     # Set up arrays
     n_d = size(onset_cases, 1)
@@ -89,10 +93,11 @@ end
     # reversed next generation distribution for detected cases
     rev_wd = [zeros(n - D_inf_duration - onset_duration); ones(D_inf_duration); zeros(onset_duration)] ./ D_inf_duration #Next generation distribution for detected cases
     # Arrays for infection events
-    # Detected infections with time shift for reported cases
     detected_infections = (onset_cases + onset_cases_hcw) + [(reported_cases+reported_cases_hcw)[:, (D_inf_duration+1):end] zeros(Int64,n_d,D_inf_duration)]
+
     # Undetected infections treated as a random process
     undetected_infections = zeros(Int64, size(onset_cases))
+
 
     #Probability matrix for where infected people move to before onset (last dimension is any district with no reported cases)
     T =
@@ -118,7 +123,7 @@ end
         #Chance of infection at district
         λ = R₀ * T * (D * (_rev_wd .* not_isolated_prob) + U * (_rev_wud))
         λ_hcw = Rₕ * (D * (_rev_wd .* not_isolated_prob) + U * (_rev_wud))
-        #Generate infections and likelihood of their observation
+        # Generate infections and likelihood of their observation
         for d = 1:n_d
             #Generate unobserved infections
             undetected_infections[d, t] ~ Poisson(λ[d] * (1 - prob_detect))
@@ -134,7 +139,7 @@ end
             end
         end
 
-        #Accumulate the likelihood that no district outside has detected infections
+        # Accumulate the likelihood that no district outside has detected infections
         Turing.@addlogprob! logpdf(Poisson(λ[n_d+1] * prob_detect),0)
 
     end
@@ -145,7 +150,7 @@ end
 
 
 ## Set up data
-@everywhere begin
+begin
     _cases_dest_prob_mat = dest_prob_mat[case_district_names, case_district_names].array
     cases_dest_prob_mat = vcat(_cases_dest_prob_mat, 1.0 .- sum(_cases_dest_prob_mat,dims = 1))
 
@@ -157,7 +162,23 @@ end
 end
 ##
 @info "generating model"
-@everywhere model = ebola(
+
+# Detected infections with time shift for reported cases
+D_inf_duration = 5
+n = length(rev_wud)
+n_d = size(onsets, 1)
+onset_duration = 7
+rev_wd = [zeros(n - D_inf_duration - onset_duration); ones(D_inf_duration); zeros(onset_duration)] ./ D_inf_duration #Next generation distribution for detected cases
+# detected_infections = (onset_cases + onset_cases_hcw) + [(reported_cases+reported_cases_hcw)[:, (D_inf_duration+1):end] zeros(Int64,n_d,D_inf_duration)]
+
+onset_cases = onsets[:,1:(end-6)]
+onset_cases_hcw = onsets_hcw[:,1:(end-6)]
+reported_cases = reported[:,1:(end-6)]
+reported_cases_hcw = reported_hcw[:,1:(end-6)]
+detected_infections = (onset_cases + onset_cases_hcw) + [(reported_cases+reported_cases_hcw)[:, (D_inf_duration+1):end] zeros(Int64,n_d,D_inf_duration)]
+
+
+model = ebola(
     onsets[:,1:(end-6)],
     reported[:,1:(end-6)],
     onsets_hcw[:,1:(end-6)],
@@ -166,22 +187,24 @@ end
     cases_move_prob,
     rev_wud,
     0.8,
-    47 + 7,
-    7
+    47 + 7
 )
 
 ##
 
-@everywhere sampler = Gibbs(
-    MH(:R₀,:Rₕ, :move_scaler, :isolation_rate),
-    PG(50, :undetected_infections, :D_inf_duration),
+sampler = Gibbs(
+    MH(:R₀ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
+        :Rₕ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
+        :move_scaler => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
+        :isolation_rate => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)) ),
+    PG(30, :undetected_infections, :D_inf_duration)
 )
-nsamples = 6000
-nchains = 3
+nsamples = 150
+nchains = 1
 @info "Sampling"
 # chain = sample(model, sampler, nsamples)
-chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains, progress=true)
+chain = sample(model, sampler, MCMCSerial(), nsamples, nchains, progress=true)
 
-CSV.write("mcmc/ebola_chain.csv", chain)
+CSV.write("mcmc/ebola_chain_test.csv", chain)
 
 # ENV["RESULTS_FILE"] = "mcmc/ebola_chain.csv"

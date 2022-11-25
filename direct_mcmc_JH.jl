@@ -1,41 +1,41 @@
 # # MCMC inference using Julia Hub
 # ### Load dependencies
 
-# using Distributed
-# using Pkg
-# Pkg.activate(".")
-# Pkg.instantiate()
+using Distributed
+
+@info "Load dependencies"
 
 # using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
-# using CSV, DataFrames
-
-# addprocs(3)
-
-@everywhere using Pkg
-@everywhere Pkg.activate(".")
+# using CSV, DataFrames, Downloads
 
 @everywhere begin
     using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
-    using CSV, DataFrames
+    using CSV, DataFrames, Downloads, AdvancedMH
 end
 
-@info "Load data"
+@info "Load data from remote"
 
 ## ### Load data
 @everywhere begin
-    onsets = load("onset_and_reported_cases.jld2")["onsets"]
-    onsets_hcw = load("onset_and_reported_cases.jld2")["onsets_hcw"]
-    reported = load("onset_and_reported_cases.jld2")["reported"]
-    reported_hcw = load("onset_and_reported_cases.jld2")["reported_hcw"]
-    dates = load("onset_and_reported_cases.jld2")["dates"]
-    case_district_names =
-        load("onset_and_reported_cases.jld2")["case_district_names"] .|> String
-    dist_mat = load("named_dist_mat.jld2")["named_dist_mat"]
-    pop_data = CSV.File("uganda_district_pop_sizes.csv") |> DataFrame
+    url_pop_data = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/uganda_district_pop_sizes.csv"
+    url_dist_mat = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/named_dist_mat.jld2"
+    url_case_data = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/onset_and_reported_cases.jld2"
+
+    case_data_dict = load(Downloads.download(url_case_data))
+    onsets = case_data_dict["onsets"]
+    onsets_hcw = case_data_dict["onsets_hcw"]
+    reported = case_data_dict["reported"]
+    reported_hcw = case_data_dict["reported_hcw"]
+    dates = case_data_dict["dates"]
+    case_district_names = case_data_dict["case_district_names"] .|> String
+    dist_mat = load(Downloads.download(url_dist_mat))["named_dist_mat"]
+    pop_data = CSV.File(Downloads.download(url_pop_data)) |> DataFrame
 end
 
 ## ### Gravity model set-up
 # Basic gravity model prediction for where Mubende flux goes
+
+@info "Set up gravity model for mobility"
 @everywhere begin
     α̂, β̂ = [1.736715422247352, 2.4621672945356283]
     pops = pop_data.population_size
@@ -84,7 +84,7 @@ end
     Rₕ ~ Exponential(1) # Mean number of healthcare workers infected
     move_scaler ~ Beta(1, 1) #scales the probability of moving away from district
     isolation_rate ~ Gamma(2, 0.25 / 2) #Rate at which infected people are found and isolated
-    D_inf_duration ~ DiscreteUniform(3,10) #Duration of period eventually detected infecteds transmit for if not isolated
+    D_inf_duration ~ DiscreteUniform(3,7) #Duration of period eventually detected infecteds transmit for if not isolated
 
     # Set up arrays
     n_d = size(onset_cases, 1)
@@ -147,6 +147,7 @@ end
 end
 
 
+@info "generating model"
 
 ## Set up data
 @everywhere begin
@@ -160,7 +161,6 @@ end
     end
 end
 ##
-@info "generating model"
 @everywhere model = ebola(
     onsets[:,1:(end-6)],
     reported[:,1:(end-6)],
@@ -177,10 +177,13 @@ end
 ##
 
 @everywhere sampler = Gibbs(
-    MH(:R₀,:Rₕ, :move_scaler, :isolation_rate),
-    PG(50, :undetected_infections, :D_inf_duration),
+    MH(:R₀ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
+        :Rₕ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
+        :move_scaler => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
+        :isolation_rate => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)) ),
+    PG(30, :undetected_infections, :D_inf_duration)
 )
-nsamples = 6000
+nsamples = 5000
 nchains = 3
 @info "Sampling"
 # chain = sample(model, sampler, nsamples)
