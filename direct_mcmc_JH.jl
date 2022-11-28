@@ -28,7 +28,8 @@ end
     reported_hcw = case_data_dict["reported_hcw"]
     dates = case_data_dict["dates"]
     case_district_names = case_data_dict["case_district_names"] .|> String
-    dist_mat = load(Downloads.download(url_dist_mat))["named_dist_mat"]
+    named_dist_mat = load(Downloads.download(url_dist_mat))["named_dist_mat"]
+    dist_mat = load(Downloads.download(url_dist_mat))["dist_mat"]
     pop_data = CSV.File(Downloads.download(url_pop_data)) |> DataFrame
 end
 
@@ -37,7 +38,7 @@ end
 
 @info "Set up gravity model for mobility"
 @everywhere begin
-    α̂, β̂ = [1.736715422247352, 2.4621672945356283]
+    α̂, β̂ = [2.6936510209208833, 3.8051621079635543]
     pops = pop_data.population_size
     flux = (pops .^ α̂) * (pops .^ α̂)' ./ (dist_mat .^ β̂)
     for i = 1:size(flux, 1)
@@ -82,7 +83,7 @@ end
     # Priors
     R₀ ~ Gamma(3, 4 / 3) #Basic R₀
     Rₕ ~ Exponential(1) # Mean number of healthcare workers infected
-    move_scaler ~ Beta(1, 1) #scales the probability of moving away from district
+    move_scalar ~ Beta(1, 1) #scales the probability of moving away from district
     isolation_rate ~ Gamma(2, 0.25 / 2) #Rate at which infected people are found and isolated
     D_inf_duration ~ DiscreteUniform(3,7) #Duration of period eventually detected infecteds transmit for if not isolated
 
@@ -94,14 +95,12 @@ end
     rev_wd = [zeros(n - D_inf_duration - onset_duration); ones(D_inf_duration); zeros(onset_duration)] ./ D_inf_duration #Next generation distribution for detected cases
     # Arrays for infection events
     # Detected infections with time shift for reported cases
-    detected_infections = (onset_cases + onset_cases_hcw) + [(reported_cases+reported_cases_hcw)[:, (D_inf_duration+1):end] zeros(Int64,n_d,D_inf_duration)]
+    detected_infections = (onset_cases + onset_cases_hcw) + [(reported_cases + reported_cases_hcw)[:, (D_inf_duration+1):end] zeros(Int64,n_d,D_inf_duration)]
     # Undetected infections treated as a random process
     undetected_infections = zeros(Int64, size(onset_cases))
 
     #Probability matrix for where infected people move to before onset (last dimension is any district with no reported cases)
-    T =
-        [Diagonal(1.0 .- move_scaler .* move_prob);zeros(n_d)'] +
-        move_scaler .* dest_prob_mat .* move_prob' #Movement matrix
+    T = [Diagonal(1.0 .- move_scalar .* move_prob);zeros(n_d)'] + move_scalar .* dest_prob_mat .* move_prob' #Movement matrix
 
     # Initialise the unobserved infection process in district 1 (Mubende)
     for t = 1:2
@@ -111,9 +110,9 @@ end
     # Transmission dynamics and observation likelihood
     for t = 3:n_t
         τ = min(t - 1, n) # length of lookback
-        lookback_times = (t-τ):(t-1)
+        lookback_times = collect((t-τ):(t-1)) # time points looking back over
         not_isolated_prob =
-            lookback_times .|> t -> exp(-isolation_rate * max(t - obs_switch, 0.0))
+            lookback_times |> reverse .|> t -> exp(-isolation_rate * min(t - max(obs_switch,lookback_times[1]), 0.0)) #reverse order probability of not-having been isolated
         D = @view detected_infections[:, lookback_times]
         U = @view undetected_infections[:, lookback_times]
         _rev_wd = @view rev_wd[(n-τ+1):n]
@@ -147,30 +146,37 @@ end
 end
 
 
+
 @info "generating model"
 
 ## Set up data
 @everywhere begin
-    _cases_dest_prob_mat = dest_prob_mat[case_district_names, case_district_names].array
-    cases_dest_prob_mat = vcat(_cases_dest_prob_mat, 1.0 .- sum(_cases_dest_prob_mat,dims = 1))
-
-
+    cases_dest_prob_mat = let
+        idxs = [name ∈ case_district_names for name in pop_data.Districts]
+        f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
+        _cases_dest_prob_mat = dest_prob_mat[idxs, idxs][f,f]
+        cases_dest_prob_mat = vcat(_cases_dest_prob_mat, 1.0 .- sum(_cases_dest_prob_mat,dims = 1))
+    end
+    
     cases_move_prob = let
         idxs = [name ∈ case_district_names for name in pop_data.Districts]
-        move_prob[idxs]
+        f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
+        move_prob[idxs][f]
     end
 end
 ##
+f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
+
 @everywhere model = ebola(
-    onsets[:,1:(end-6)],
-    reported[:,1:(end-6)],
-    onsets_hcw[:,1:(end-6)],
-    reported_hcw[:,1:(end-6)],
+    onsets[f,:],
+    reported[f,:],
+    onsets_hcw[f,:],
+    reported_hcw[f,:],
     cases_dest_prob_mat,
     cases_move_prob,
     rev_wud,
     0.8,
-    47 + 7,
+    47 + 7,# Detection time in terms of the 7 day lagged onset times
     7
 )
 
@@ -179,7 +185,7 @@ end
 @everywhere sampler = Gibbs(
     MH(:R₀ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
         :Rₕ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
-        :move_scaler => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
+        :move_scalar => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
         :isolation_rate => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)) ),
     PG(30, :undetected_infections, :D_inf_duration)
 )

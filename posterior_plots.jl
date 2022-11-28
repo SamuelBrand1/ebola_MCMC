@@ -36,7 +36,8 @@ pop_data = CSV.File(Downloads.download(url_pop_data)) |> DataFrame
 ## ### Gravity model set-up
 # Basic gravity model prediction for where Mubende flux goes
 
-α̂, β̂ = [1.736715422247352, 2.4621672945356283]
+# α̂, β̂ = [1.736715422247352, 2.4621672945356283]
+α̂, β̂ = [2.6936510209208833, 3.8051621079635543]
 pops = pop_data.population_size
 flux = (pops .^ α̂) * (pops .^ α̂)' ./ (dist_mat .^ β̂)
 for i = 1:size(flux, 1)
