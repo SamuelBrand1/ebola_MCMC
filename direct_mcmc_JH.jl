@@ -120,8 +120,8 @@ end
         _rev_wud = @view rev_wud[(n-τ+1):n]
 
         #Chance of infection at district
-        λ = R₀ * T * (D * (_rev_wd .* not_isolated_prob) + U * (_rev_wud))
-        λ_hcw = Rₕ * (D * (_rev_wd .* not_isolated_prob) + U * (_rev_wud))
+        λ = R₀ * T * (D * (_rev_wd .* not_isolated_prob) + U * _rev_wud)
+        λ_hcw = Rₕ * (D * (_rev_wd .* not_isolated_prob) + U * _rev_wud)
         #Generate infections and likelihood of their observation
         for d = 1:n_d
             #Generate unobserved infections
