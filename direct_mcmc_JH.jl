@@ -3,10 +3,14 @@
 
 using Distributed
 
+addprocs(3)
+
 @info "Load dependencies"
 
 # using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
 # using CSV, DataFrames, Downloads
+@everywhere using Pkg
+@everywhere Pkg.activate(".")
 
 @everywhere begin
     using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
@@ -165,7 +169,7 @@ end
     end
 end
 ##
-f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
+@everywhere f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
 
 @everywhere model = ebola(
     onsets[f,:],
@@ -195,6 +199,6 @@ nchains = 3
 # chain = sample(model, sampler, nsamples)
 chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains, progress=true)
 
-CSV.write("ebola_chain.csv", chain)
+CSV.write("ebola_chain_new.csv", chain)
 
 ENV["RESULTS_FILE"] = "ebola_chain.csv"
