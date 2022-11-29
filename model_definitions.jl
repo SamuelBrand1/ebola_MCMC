@@ -1,18 +1,4 @@
-# # MCMC inference for simple Ebola model using Julia Hub
-# ### Load dependencies
-
-using Distributed
-
-# addprocs(3)
-
-@info "Load dependencies"
-
-# using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
-# using CSV, DataFrames, Downloads
-# @everywhere using Pkg
-# @everywhere Pkg.activate(".")
-
-@everywhere begin
+ begin
     using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
     using CSV, DataFrames, Downloads, AdvancedMH
 end
@@ -20,7 +6,7 @@ end
 @info "Load data from remote"
 
 ## ### Load data
-@everywhere begin
+ begin
     url_pop_data = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/uganda_district_pop_sizes.csv"
     url_dist_mat = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/named_dist_mat.jld2"
     url_case_data = "https://warwick.ac.uk/fac/cross_fac/zeeman_institute/staffv2/sam_brand/open_data/onset_and_reported_cases.jld2"
@@ -37,42 +23,9 @@ end
     pop_data = CSV.File(Downloads.download(url_pop_data)) |> DataFrame
 end
 
-## ### Gravity model set-up
-# Basic gravity model prediction for where Mubende flux goes
-
-@info "Set up gravity model for mobility"
-@everywhere begin
-    α̂, β̂ = [2.6936510209208833, 3.8051621079635543]
-    pops = pop_data.population_size
-    flux = (pops .^ α̂) * (pops .^ α̂)' ./ (dist_mat .^ β̂)
-    for i = 1:size(flux, 1)
-        flux[i, i] = 0.0
-    end
-
-    # Set up matrix for probabiltiy of destination
-    # dest_prob_mat_{ij} = probability from j → i
-
-    dest_prob_mat = similar(flux)
-    for j = 1:size(dest_prob_mat, 1)
-        dest_prob_mat[:, j] = flux[j, :] / sum(flux[j, :]) #probability component
-    end
-
-    # Set-up the unnormalised movement rate by district
-    move_prob = pops .^ (α̂ - 1) / maximum(pops .^ (α̂ - 1))
-end
-## Parameters
-@everywhere begin
-    γᵣ = 1 / 10 # Removal rate for undetecteds
-    R_mean_prior = 0.588 * 5 + sum(0.588 * [zeros(7); [0.2 * exp(-γᵣ * t)  for t = 1:25]])
-    w_ud = normalize([zeros(7); [exp(-γᵣ * t) for t = 1:30]], 1)
-    rev_wud = reverse(w_ud)
-end
-## Generative model and likelihood in Turing
 
 
-@info "Defining model"
-
-@everywhere @model function ebola(
+@model function ebola(
     onset_cases,
     reported_cases,
     onset_cases_hcw,
@@ -116,7 +69,7 @@ end
         τ = min(t - 1, n) # length of lookback
         lookback_times = collect((t-τ):(t-1)) # time points looking back over
         not_isolated_prob =
-            lookback_times |> reverse .|> ts -> exp(-isolation_rate * max(ts - max(obs_switch,lookback_times[1]), 0.0)) #reverse order probability of not-having been isolated by time t given infection in past
+            lookback_times |> reverse .|> ts -> exp(-isolation_rate * min(ts - max(obs_switch,lookback_times[1]), 0.0)) #reverse order probability of not-having been isolated
         D = @view detected_infections[:, lookback_times]
         U = @view undetected_infections[:, lookback_times]
         _rev_wd = @view rev_wd[(n-τ+1):n]
@@ -154,7 +107,7 @@ end
 @info "generating model"
 
 ## Set up data
-@everywhere begin
+begin
     cases_dest_prob_mat = let
         idxs = [name ∈ case_district_names for name in pop_data.Districts]
         f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
@@ -169,9 +122,9 @@ end
     end
 end
 ##
-@everywhere f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
+f = findall(sum(onsets + reported, dims = 2)[:] .> 0) # Remove districts with no non-HCW cases
 
-@everywhere model = ebola(
+model = ebola(
     onsets[f,:],
     reported[f,:],
     onsets_hcw[f,:],
@@ -183,22 +136,3 @@ end
     47 + 7,# Detection time in terms of the 7 day lagged onset times
     7
 )
-
-##
-
-@everywhere sampler = Gibbs(
-    MH(:R₀ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
-        :Rₕ => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
-        :move_scalar => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)), 
-        :isolation_rate => AdvancedMH.RandomWalkProposal(Normal(0, 0.05)) ),
-    PG(30, :undetected_infections, :D_inf_duration)
-)
-nsamples = 5000
-nchains = 3
-@info "Sampling"
-
-chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains, progress=true)
-
-CSV.write("ebola_chain.csv", chain)
-
-ENV["RESULTS_FILE"] = "ebola_chain.csv"
