@@ -115,8 +115,8 @@ end
     for t = 3:n_t
         τ = min(t - 1, n) # length of lookback
         lookback_times = collect((t-τ):(t-1)) # time points looking back over
-        not_isolated_prob =
-            lookback_times |> reverse .|> ts -> exp(-isolation_rate * max(ts - max(obs_switch,lookback_times[1]), 0.0)) #reverse order probability of not-having been isolated by time t given infection in past
+        not_isolated_prob = cumsum(reverse(lookback_times .>= obs_switch)) |> reverse .|> ts -> exp(-isolation_rate * ts) #Chance of being isolated taking into account that isolation only starts on the first date of confirmation 
+            
         D = @view detected_infections[:, lookback_times]
         U = @view undetected_infections[:, lookback_times]
         _rev_wd = @view rev_wd[(n-τ+1):n]
