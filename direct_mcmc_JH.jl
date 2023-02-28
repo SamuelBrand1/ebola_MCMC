@@ -3,14 +3,14 @@
 
 using Distributed
 
-addprocs(3)
+# addprocs(3)
 ##
 @info "Load dependencies"
 
 # using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
 # using CSV, DataFrames, Downloads
-@everywhere using Pkg
-@everywhere Pkg.activate(".")
+# @everywhere using Pkg
+# @everywhere Pkg.activate(".")
 
 @everywhere begin
     using JLD2, Dates, InlineStrings, Turing, LinearAlgebra, StatsBase, NamedArrays
@@ -194,11 +194,11 @@ end
     PG(30, :undetected_infections, :D_inf_duration)
 )
 nsamples = 5000
-nchains = 3
+nchains = 7
 @info "Sampling"
 
 chain = sample(model, sampler, MCMCDistributed(), nsamples, nchains, progress=true)
 
-CSV.write("ebola_chain_new1.csv", chain)
+CSV.write("ebola_chain_new.csv", chain)
 
-ENV["RESULTS_FILE"] = "ebola_chain.csv"
+ENV["RESULTS_FILE"] = "ebola_chain_new.csv"

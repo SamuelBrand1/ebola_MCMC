@@ -1,62 +1,64 @@
-using DataFrames: _gen_colnames
 using CSV, DataFrames, Turing, StatsPlots, MCMCChains
+using StatsPlots.PlotMeasures
 
 ##
 
-
-# mcmc_files = ["mcmc/ebola_chain1.csv", "mcmc/ebola_chain2.csv"]
-mcmc_files = ["mcmc/ebola_chain_new.csv"]
-chain_csv = mapreduce(fn -> DataFrame(CSV.File(fn)), vcat, mcmc_files)
-# # relabel chains
-# chain_csv = let
-#     n = Integer(size(chain_csv, 1) / 2)
-#     chain_csv.chain[(n+1):end] .+= 3
-#     chain_csv
-# end
 ##
+mcmc_files = ["mcmc/ebola_chain_new1.csv", "mcmc/ebola_chain_new2.csv", "mcmc/ebola_chain_new3.csv"]
+
+
+function gather_chains(mcmc_files)
+    chain_csv = CSV.File(mcmc_files[1]) |> DataFrame
+    if length(mcmc_files) > 1
+        for (n, fn) = enumerate(mcmc_files[2:end])
+            max_chn_number = maximum(chain_csv.chain) #Find how many independent chains have already been included
+            _chain_csv = DataFrame(CSV.File(fn))
+            _chain_csv.chain .+= max_chn_number #Increase the chain number
+            chain_csv = vcat(chain_csv, _chain_csv) #combine the MCMC draws
+        end
+    end
+    return chain_csv
+end
+
+chain_csv = gather_chains(mcmc_files)
+
+## Construct a Chains object
 
 colnames = names(chain_csv) |> x -> x[3:(end-1)] .|> Symbol
 a = mapreduce(
     n -> Array(
-        chain_csv[(chain_csv.chain.==n).&&(chain_csv.iteration.>300), :][:, 3:(end-1)],
+        chain_csv[(chain_csv.chain .== n).&&(chain_csv.iteration .> 500), :][:, 3:(end-1)],
     ),
     (x, y) -> cat(x, y, dims = 3),
-    1:3,
+    1:maximum(chain_csv.chain),
 )
 chn = Chains(a, colnames)
 
 ##
-
-
-plt_R0_chain =
-    plot(chn[:R₀], lab = [j for i = 1:1, j = 1:6], alpha = 0.5, title = "R0 chain")
-
-plt_Rh_chain =
-    plot(chn[:Rₕ][:, :], lab = [j for i = 1:1, j = 1:6], alpha = 0.5, title = "R_H chain")
-
-plt_move_chain = plot(
-    chn[:move_scalar][:, :],
-    lab = [j for i = 1:1, j = 1:6],
-    alpha = 0.5,
-    title = "move_scalar chain",
-    legend = :bottomright,
-)
-
-
-plt_iso_chain = plot(
-    chn[:isolation_rate][:, :],
-    lab = [j for i = 1:1, j = 1:6],
-    alpha = 0.5,
-    title = "isolation rate chain",
-)
-
-##
 include("model_definitions.jl")
+##
+parameter_chn = chn[:,1:5,1:end]
+chn_plt = plot(parameter_chn,
+                left_margin = 10mm,
+                dpi = 250)
+##
+savefig(chn_plt, "plots/chain_plot.png")
+crn_plt = corner(parameter_chn,
+                    size = (1000,1000))
+savefig(crn_plt, "plots/corner_plot.png")
 
-gen_infs = generated_quantities(model, chn[1:5:end, :, [1, 2, 3]])
+dest_plt = heatmap(cases_dest_prob_mat[1:7,1:7],
+                    xlabel = "From",
+                    ylabel = "To",
+                    xticks = (1:7, case_district_names[f]),
+                    yticks = (1:7, case_district_names[f]))
+bar(cases_move_prob)
+##
+
+gen_infs = generated_quantities(model, chn[1:10:end, :, :])
 n_d, n_t = size(gen_infs[1][1])
 ##
-# Stack gen_infs
+# Stack the generated infections across chains
 _gen_infs = gen_infs[:]
 
 mean_detected_infs = [mean([inf[2][d, t] for inf in _gen_infs]) for d = 1:n_d, t = 1:n_t]

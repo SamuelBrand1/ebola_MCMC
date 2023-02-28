@@ -23,7 +23,34 @@ end
     pop_data = CSV.File(Downloads.download(url_pop_data)) |> DataFrame
 end
 
+@info "Set up gravity model for mobility"
+begin
+    α̂, β̂ = [2.6936510209208833, 3.8051621079635543]
+    # α̂, β̂ = [0.6936510209208833, 2.0051621079635543]
+    pops = pop_data.population_size
+    flux = (pops .^ α̂) * (pops .^ α̂)' ./ (dist_mat .^ β̂)
+    for i = 1:size(flux, 1)
+        flux[i, i] = 0.0
+    end
 
+    # Set up matrix for probabiltiy of destination
+    # dest_prob_mat_{ij} = probability from j → i
+
+    dest_prob_mat = similar(flux)
+    for j = 1:size(dest_prob_mat, 1)
+        dest_prob_mat[:, j] = flux[j, :] / sum(flux[j, :]) #probability component
+    end
+
+    # Set-up the unnormalised movement rate by district
+    move_prob = pops .^ (α̂ - 1) / maximum(pops .^ (α̂ - 1))
+end
+## Parameters
+begin
+    γᵣ = 1 / 10 # Removal rate for undetecteds
+    R_mean_prior = 0.588 * 5 + sum(0.588 * [zeros(7); [0.2 * exp(-γᵣ * t)  for t = 1:25]])
+    w_ud = normalize([zeros(7); [exp(-γᵣ * t) for t = 1:30]], 1)
+    rev_wud = reverse(w_ud)
+end
 
 @model function ebola(
     onset_cases,
@@ -68,8 +95,8 @@ end
     for t = 3:n_t
         τ = min(t - 1, n) # length of lookback
         lookback_times = collect((t-τ):(t-1)) # time points looking back over
-        not_isolated_prob =
-            lookback_times |> reverse .|> ts -> exp(-isolation_rate * min(ts - max(obs_switch,lookback_times[1]), 0.0)) #reverse order probability of not-having been isolated
+        not_isolated_prob = cumsum(reverse(lookback_times .>= obs_switch)) |> reverse .|> ts -> exp(-isolation_rate * ts) #Chance of being isolated taking into account that isolation only starts on the first date of confirmation 
+
         D = @view detected_infections[:, lookback_times]
         U = @view undetected_infections[:, lookback_times]
         _rev_wd = @view rev_wd[(n-τ+1):n]
